@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Web Scraper</title>
+  <style>
+    body {
+      width: 300px;
+      padding: 10px;
+    }
+    .container {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+    }
+    button {
+      padding: 5px 10px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div>
+      <label for="maxPages">Max Pages:</label>
+      <input type="number" id="maxPages" min="1" value="1">
+    </div>
+    <button id="selectNextButton">Select Next Button</button>
+    <button id="startScraping">Start Scraping</button>
+    <button id="stopScraping">Stop Scraping</button>
+    <div id="results">
+      <table id="dataTable">
+        <thead>
+          <tr>
+            <th>Row Data</th>
+            <th>Links</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html> 

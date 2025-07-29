@@ -1,0 +1,5 @@
+.extension-highlight {
+    outline: 2px solid #007bff !important;
+    background-color: rgba(0, 123, 255, 0.1) !important;
+    cursor: pointer !important;
+} 

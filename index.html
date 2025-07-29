@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Web Scraper</title>
+    <style>
+        body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+        }
+        button {
+            margin: 5px;
+            padding: 8px 16px;
+        }
+        .results-container {
+            margin-top: 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f5f5f5;
+            position: relative;
+        }
+        .column-name {
+            display: inline-block;
+            margin-right: 5px;
+        }
+        .edit-column {
+            cursor: pointer;
+            color: #007bff;
+            font-size: 12px;
+        }
+        .column-input {
+            width: 80%;
+            padding: 2px 5px;
+        }
+        .button-group {
+            margin-bottom: 10px;
+        }
+        .delete-column {
+            cursor: pointer;
+            color: #dc3545;
+            font-size: 12px;
+            margin-left: 5px;
+        }
+        .column-actions {
+            display: inline-block;
+            margin-left: 10px;
+        }
+        #saveLocation {
+            margin: 5px;
+            padding: 8px;
+            width: 200px;
+            background-color: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        #chooseDirBtn {
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        #chooseDirBtn:hover {
+            background-color: #e9ecef;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Web Scraper</h2>
+        <div class="button-group">
+            <button id="selectNextBtn">Select Next Button</button>
+            <button id="startBtn">Start Scraping</button>
+            <button id="stopBtn">Stop</button>
+            <input type="number" id="maxPages" value="1" min="1" placeholder="Max Pages">
+        </div>
+        <div class="button-group">
+            <button id="saveCSVBtn">Save CSV</button>
+            <input type="text" id="saveLocation" placeholder="Save Location" readonly>
+            <button id="chooseDirBtn">Choose Directory</button>
+        </div>
+        <div class="results-container">
+            <table id="resultsTable">
+                <thead>
+                    <tr id="headerRow"></tr>
+                </thead>
+                <tbody id="resultsBody"></tbody>
+            </table>
+        </div>
+    </div>
+    <script src="index.js"></script>
+</body>
+</html> 
