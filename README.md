@@ -27,10 +27,6 @@ git clone https://github.com/kunokun12/apollo-scraper.git
 - **Free/Non-working account**: Set maximum pages to 3
 - **Paid/Working account**: You can set up to 5 pages
 
-### Saving Data
-1. Click "Choose Directory" to select where to save the CSV file
-2. Click "Save CSV" to export the data
-
 ### Customization
 - You can rename and remove columns in the table
 - Your column preferences will be remembered by the extension
