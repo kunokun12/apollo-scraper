@@ -4,20 +4,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const stopBtn = document.getElementById('stopBtn');
     const maxPagesInput = document.getElementById('maxPages');
     const saveCSVBtn = document.getElementById('saveCSVBtn');
-    const chooseDirBtn = document.getElementById('chooseDirBtn');
     const saveLocationInput = document.getElementById('saveLocation');
     let columnNames = {};
-    let selectedDirectory = null;
     const processedRows = new Set();
     
     // Load saved column names
-    chrome.storage.local.get(['columnNames', 'lastSaveLocation'], function(result) {
+    chrome.storage.local.get(['columnNames'], function(result) {
         if (result.columnNames) {
             columnNames = result.columnNames;
-        }
-        if (result.lastSaveLocation) {
-            saveLocationInput.value = result.lastSaveLocation;
-            selectedDirectory = result.lastSaveLocation;
         }
     });
 
@@ -206,37 +200,22 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    chooseDirBtn.addEventListener('click', async () => {
-        try {
-            const dirHandle = await window.showDirectoryPicker();
-            selectedDirectory = dirHandle;
-            saveLocationInput.value = dirHandle.name;
-            // Save the last used location
-            chrome.storage.local.set({ lastSaveLocation: dirHandle.name });
-        } catch (err) {
-            console.error('Error selecting directory:', err);
-            alert('Failed to select directory. Please try again.');
-        }
-    });
+
 
     async function saveCSV() {
-        // Get all data from the table
         const table = document.getElementById('resultsTable');
         const rows = Array.from(table.getElementsByTagName('tr'));
-        
-        if (rows.length <= 1) { // Only header row or empty
+
+        if (rows.length <= 1) {
             alert('No data to export!');
             return;
         }
 
         let csvContent = [];
-        
-        // Process header row
         const headerCells = rows[0].getElementsByClassName('column-name');
         const headers = Array.from(headerCells).map(cell => cell.textContent.trim());
         csvContent.push(headers.map(header => `"${header}"`).join(','));
-        
-        // Process data rows
+
         const dataRows = Array.from(table.getElementsByTagName('tbody')[0].getElementsByTagName('tr'));
         dataRows.forEach(row => {
             const cells = Array.from(row.getElementsByTagName('td'));
@@ -246,30 +225,18 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             csvContent.push(rowData.join(','));
         });
-        
-        // Create CSV content
-        const csvString = csvContent.join('\n');
-        
-        try {
-            if (!selectedDirectory) {
-                alert('Please select a save location first!');
-                return;
-            }
 
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const filename = `scraped_data_${timestamp}.csv`;
-            
-            // Create file in the selected directory
-            const fileHandle = await selectedDirectory.getFileHandle(filename, { create: true });
-            const writable = await fileHandle.createWritable();
-            await writable.write(new Blob(['\ufeff' + csvString], { type: 'text/csv;charset=utf-8' }));
-            await writable.close();
-            
-            alert(`File saved successfully as ${filename}`);
-        } catch (err) {
-            console.error('Error saving file:', err);
-            alert('Failed to save file. Please check the save location and try again.');
-        }
+        const csvString = csvContent.join('\n');
+        const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'scraped_data.csv';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     }
 
     saveCSVBtn.addEventListener('click', saveCSV);
