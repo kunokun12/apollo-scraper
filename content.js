@@ -253,8 +253,14 @@ function getRowBasicData(row) {
             console.log(`[DEBUG] Identified as social URL: ${url}`);
             socialUrls.push(url);
           } 
-          // Website
-          else if (url.startsWith('http') && !websiteUrls.includes(url)) {
+          // Website - only add if it's not a social media URL and we haven't found any social media URLs yet
+          else if (url.startsWith('http') && 
+                  !socialUrls.length && 
+                  !lowerUrl.includes('facebook.com') &&
+                  !lowerUrl.includes('twitter.com') &&
+                  !lowerUrl.includes('x.com') &&
+                  !lowerUrl.includes('instagram.com') &&
+                  !websiteUrls.includes(url)) {
             console.log(`[DEBUG] Identified as website URL: ${url}`);
             websiteUrls.push(url);
           } else {
@@ -265,9 +271,13 @@ function getRowBasicData(row) {
         // Update the arrays in basicData
         if (socialUrls.length > 0) {
           basicData['Social_URLs'] = socialUrls.join(', ');
+        } else {
+          basicData['Social_URLs'] = ''; // Explicitly set to empty string if no social URLs found
         }
         if (websiteUrls.length > 0) { 
           basicData['Website'] = websiteUrls.join(', ');
+        } else {
+          basicData['Website'] = ''; // Also ensure Website is an empty string if no website URLs found
         }
         
         console.log('[DEBUG] Final URL Categorization:', {
