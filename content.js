@@ -413,11 +413,10 @@ async function startScraping() {
           // Wait for new page to load by checking for rows with increased timeout
           await new Promise((resolve) => {
             const checkForRows = setInterval(() => {
-              const newRows = document.getElementsByClassName('zp_hWv1I');
+              const newRows = document.getElementsByClassName('zp_Uiy0R');
               if (newRows.length > 0) {
                 clearInterval(checkForRows);
-                // Add additional wait time after rows are found
-                setTimeout(resolve, 2000);
+                resolve();
               }
             }, 200); // Check every 200ms
             
