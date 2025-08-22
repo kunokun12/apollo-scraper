@@ -323,19 +323,97 @@ function generateRowId(row) {
   }
 }
 
+// Utility wait
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Wait for the whole table to stabilize (texts stop changing)
+async function waitForRowsToStabilize(maxWaitMs = 6000, samples = 2, intervalMs = 150) {
+  const start = Date.now();
+  let lastSignature = '';
+  let stableSamples = 0;
+  while (Date.now() - start < maxWaitMs) {
+    const rows = Array.from(document.getElementsByClassName('zp_Uiy0R'));
+    const signature = rows
+      .map(r => Array.from(r.getElementsByClassName('zp_egyXf'))
+        .map(c => c.textContent.trim())
+        .join('|'))
+      .join('||');
+    if (signature && signature === lastSignature) {
+      stableSamples += 1;
+      if (stableSamples >= samples) {
+        // console.log('[WAIT] Rows stabilized');
+        return true;
+      }
+    } else {
+      stableSamples = 0;
+      lastSignature = signature;
+    }
+    await delay(intervalMs);
+  }
+  // console.log('[WAIT] Rows stabilization timed out');
+  return false;
+}
+
+// Wait for a specific row to finish rendering its content/links
+async function waitForRowReady(row, maxWaitMs = 5000) {
+  const start = Date.now();
+  let last = '';
+  let stable = 0;
+  while (Date.now() - start < maxWaitMs) {
+    const cols = Array.from(row.getElementsByClassName('zp_egyXf'));
+    const text = cols.map(el => el.textContent.trim()).join('|');
+    const linksPresent = row.querySelectorAll('.zp_egyXf a').length > 0;
+    if (text && text === last) {
+      stable += 1;
+      if (stable >= 2) return true;
+    } else {
+      stable = 0;
+      last = text;
+    }
+    if (linksPresent && stable >= 1) return true;
+    await delay(200);
+  }
+  return false;
+}
+
 async function startScraping() {
   console.log(`Starting scraping iteration ${scrapeIteration}...`);
   
   try {
     while (isScrapingActive && currentPage <= maxPages) {
+      // Read current page from DOM using provided XPath and log it
+      const xpath = '//*[@id="main-container-column-2"]/div/div/div/div[3]/div[2]/div[2]/div[2]/div/div[2]/div[1]/div[1]/span';
+      let domPage = null;
+      try {
+        const node = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+        const text = node ? node.textContent.trim() : '';
+        const parsed = text ? parseInt(text.replace(/[^0-9]/g, ''), 10) : NaN;
+        if (!isNaN(parsed)) {
+          domPage = parsed;
+          currentPage = domPage; // sync with DOM
+        }
+        console.log(`[PAGE] XPath text='${text}', parsed=${isNaN(parsed) ? 'NaN' : parsed}, currentPage=${currentPage}, maxPages=${maxPages}`);
+      } catch (e) {
+        console.log('[PAGE] Failed to read current page from XPath:', e);
+      }
+
       const rows = document.getElementsByClassName('zp_Uiy0R');
       console.log(`Processing page ${currentPage}, found ${rows.length} rows`);
+      // Wait for rows to finish rendering to avoid empty columns (lighter, faster)
+      const pageStable = await waitForRowsToStabilize(6000, 2, 150);
       
       // Process all rows in current page immediately
+      const pageBatch = [];
       for (const row of rows) {
         if (!isScrapingActive) {
           console.log('Scraping stopped by user');
           return;
+        }
+        // Ensure row content is ready only if page was not fully stable
+        if (!pageStable) {
+          await waitForRowReady(row, 1200);
         }
         
         const basicData = getRowBasicData(row);
@@ -344,21 +422,25 @@ async function startScraping() {
         // Check if this row is already in the cache
         if (!scrapedDataCache.has(rowId)) {
           scrapedDataCache.set(rowId, basicData);
-          try {
-            await chrome.runtime.sendMessage({
-              type: 'scrapedData',
-              data: basicData
-            });
-            console.log('Sent new scraped data:', basicData);
-          } catch (error) {
-            console.log('Error sending data:', error);
-          }
+          pageBatch.push(basicData);
         } else {
           console.log('Skipping duplicate row with ID:', rowId);
         }
       }
+      // Send in one batch to reduce message overhead
+      if (pageBatch.length) {
+        try {
+          await chrome.runtime.sendMessage({
+            type: 'scrapedDataBatch',
+            data: pageBatch
+          });
+          console.log(`Sent batch of ${pageBatch.length} rows`);
+        } catch (error) {
+          console.log('Error sending batch data:', error);
+        }
+      }
       
-      // Check if we've reached the last page
+      // Check if we've reached the last page (based on DOM page monitoring)
       if (currentPage >= maxPages) {
         console.log('Reached last page, processing excludes...');
         const excludeSuccess = await processExcludes();
@@ -372,7 +454,7 @@ async function startScraping() {
         // Start new iteration only if exclude process was successful
         console.log(`Starting iteration ${scrapeIteration + 1}...`);
         scrapeIteration++;
-        currentPage = 1;
+        currentPage = 1; // reset our counter; DOM will resync on next loop
         
         // Check if scraping was stopped during exclude process
         if (!isScrapingActive) {
@@ -426,6 +508,8 @@ async function startScraping() {
               resolve();
             }, 10000);
           });
+          // After rows are present, brief stabilization wait
+          await waitForRowsToStabilize(5000, 2, 150);
         } else {
           console.log('Next button not found after waiting, stopping scraping');
           isScrapingActive = false;

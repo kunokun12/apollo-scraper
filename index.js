@@ -191,10 +191,27 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Update the message listener to use the table
+    // Update the message listener to use the table (supports batch)
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.type === 'scrapedData') {
             updateTable(message.data);
+        } else if (message.type === 'scrapedDataBatch') {
+            const batch = Array.isArray(message.data) ? message.data : [];
+            // Use a DocumentFragment to minimize reflows
+            const headerRow = document.getElementById('headerRow');
+            const resultsBody = document.getElementById('resultsBody');
+            const frag = document.createDocumentFragment();
+            batch.forEach(item => {
+                // Initialize headers on first data if needed
+                if (headerRow.children.length === 0) {
+                    for (const key in item) {
+                        headerRow.appendChild(createHeaderCell(key, item[key]));
+                    }
+                }
+                // Dedup relies on processedRows in updateTable; call it for its logic
+                updateTable(item);
+            });
+            resultsBody.appendChild(frag);
         } else if (message.type === 'error') {
             alert(message.message);
         }
