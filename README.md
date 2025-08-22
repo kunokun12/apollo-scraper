@@ -22,7 +22,6 @@ git clone https://github.com/kunokun12/apollo-scraper.git
 
 ### Before Starting
 - Make sure the company exclude filter is visible in Apollo before clicking "Start Scraping"
--
 - Required: Set your Apollo search settings as shown below before scraping. This ensures all required columns load consistently and the scraper captures complete data.
 
 ![Apollo Search Settings](Search%20Field.png)
