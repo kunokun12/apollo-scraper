@@ -7,6 +7,71 @@ let scrapedDataCache = new Map();
 let scrapeIteration = 1;
 const MAX_ITERATIONS = Infinity; // Allow infinite iterations until stopped
 
+// Detect Apollo "Access Denied" block and show warning
+function getNodeByXPath(xpath) {
+  try {
+    return document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+  } catch (e) {
+    console.log('XPath evaluation failed:', e);
+    return null;
+  }
+}
+
+function isAccessDeniedPresent() {
+  // Per request, check this exact XPath
+  const blockXpath = '/html/body/div[18]/div[2]/div/div';
+  const node = getNodeByXPath(blockXpath);
+  if (!node) return false;
+  const text = (node.textContent || '').toLowerCase();
+  return text.includes('access denied');
+}
+
+function showScrapingStoppedWarning(message) {
+  const existing = document.getElementById('ids-scrape-warning');
+  if (existing) return; // do not duplicate
+  
+  const overlay = document.createElement('div');
+  overlay.id = 'ids-scrape-warning';
+  overlay.style.position = 'fixed';
+  overlay.style.inset = '0';
+  overlay.style.background = 'rgba(0,0,0,0.45)';
+  overlay.style.zIndex = '2147483647';
+  overlay.style.display = 'flex';
+  overlay.style.alignItems = 'center';
+  overlay.style.justifyContent = 'center';
+
+  const panel = document.createElement('div');
+  panel.style.maxWidth = '680px';
+  panel.style.width = '90%';
+  panel.style.background = '#fff';
+  panel.style.border = '2px solid #f5c2c7';
+  panel.style.boxShadow = '0 10px 30px rgba(0,0,0,0.25)';
+  panel.style.borderRadius = '10px';
+  panel.style.fontFamily = 'system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji", "Segoe UI Emoji"';
+  panel.style.color = '#1f2937';
+
+  panel.innerHTML = `
+    <div style="display:flex; gap:16px; padding:18px 20px; align-items:flex-start;">
+      <div style="flex:0 0 auto; width:32px; height:32px; border-radius:50%; background:#f8d7da; color:#842029; display:flex; align-items:center; justify-content:center; font-weight:700;">!</div>
+      <div style="flex:1 1 auto;">
+        <div style="font-size:18px; font-weight:700; margin-bottom:6px; color:#842029;">Scraping Stopped</div>
+        <div style="font-size:14px; line-height:1.4; white-space:pre-wrap;">${message}</div>
+      </div>
+    </div>
+    <div style="display:flex; justify-content:flex-end; padding:0 20px 16px 20px; gap:10px;">
+      <button id="ids-scrape-warning-close" style="appearance:none; border:1px solid #d1d5db; background:#fff; color:#111827; border-radius:6px; padding:8px 14px; cursor:pointer;">Close</button>
+    </div>
+  `;
+
+  overlay.appendChild(panel);
+  document.documentElement.appendChild(overlay);
+
+  const closeBtn = overlay.querySelector('#ids-scrape-warning-close');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', () => overlay.remove());
+  }
+}
+
 // Initialize selectors from localStorage if available
 try {
   const savedNextSelector = localStorage.getItem('nextButtonSelector');
@@ -32,6 +97,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           type: 'error',
           message: 'Please open the exclude text area first before starting the scraper'
         });
+        return;
+      }
+
+      // Stop immediately if Apollo Access Denied block is present
+      if (isAccessDeniedPresent()) {
+        const msg = 'Access Denied detected on page. Scraping has been stopped to prevent further actions. Please resolve the block before retrying.';
+        isScrapingActive = false;
+        showScrapingStoppedWarning(msg);
+        try { chrome.runtime.sendMessage({ type: 'error', message: msg }); } catch (e) {}
+        cleanupMemory();
         return;
       }
       
@@ -383,6 +458,15 @@ async function startScraping() {
   
   try {
     while (isScrapingActive && currentPage <= maxPages) {
+      // Halt if Apollo presents an Access Denied modal/content
+      if (isAccessDeniedPresent()) {
+        const msg = 'Access Denied detected on page. Scraping has been stopped to prevent further actions. Please resolve the block before retrying.';
+        console.log(msg);
+        isScrapingActive = false;
+        showScrapingStoppedWarning(msg);
+        try { await chrome.runtime.sendMessage({ type: 'error', message: msg }); } catch (e) {}
+        return;
+      }
       // Read current page from DOM using provided XPath and log it
       const xpath = '//*[@id="main-container-column-2"]/div/div/div/div[3]/div[2]/div[2]/div[2]/div/div[2]/div[1]/div[1]/span';
       let domPage = null;

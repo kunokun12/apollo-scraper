@@ -219,6 +219,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 
+    // Helpers to detect empty cells/rows in table
+    function isCellEmptyText(text) {
+        const s = (text || '')
+            .replace(/\u00A0/g, ' ')   // non-breaking spaces
+            .replace(/[\u200B-\u200D\uFEFF]/g, '') // zero-width chars
+            .trim();
+        return s === '';
+    }
+
+    function isRowEmpty(row) {
+        const cells = Array.from(row.getElementsByTagName('td'));
+        if (cells.length === 0) return true;
+        return cells.every(td => isCellEmptyText(td.textContent));
+    }
+
     async function saveCSV() {
         const table = document.getElementById('resultsTable');
         const rows = Array.from(table.getElementsByTagName('tr'));
@@ -233,11 +248,22 @@ document.addEventListener('DOMContentLoaded', () => {
         const headers = Array.from(headerCells).map(cell => cell.textContent.trim());
         csvContent.push(headers.map(header => `"${header}"`).join(','));
 
-        const dataRows = Array.from(table.getElementsByTagName('tbody')[0].getElementsByTagName('tr'));
+        const tbody = table.getElementsByTagName('tbody')[0];
+        let dataRows = Array.from(tbody.getElementsByTagName('tr'));
+        // Filter out any fully empty data rows (including a leading blank row)
+        dataRows = dataRows.filter(row => !isRowEmpty(row));
+
+        if (dataRows.length === 0) {
+            alert('No data to export!');
+            return;
+        }
         dataRows.forEach(row => {
             const cells = Array.from(row.getElementsByTagName('td'));
             const rowData = cells.map(cell => {
-                const value = cell.textContent.trim();
+                const value = (cell.textContent || '')
+                    .replace(/\u00A0/g, ' ')
+                    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+                    .trim();
                 return `"${value.replace(/"/g, '""')}"`;
             });
             csvContent.push(rowData.join(','));
