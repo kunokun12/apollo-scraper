@@ -1,12 +1,4 @@
-let isSelecting = false;
 let isScrapingActive = false;
-
-document.getElementById('selectNextButton').addEventListener('click', async () => {
-  isSelecting = true;
-  chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-    chrome.tabs.sendMessage(tabs[0].id, {action: "selectNextButton"});
-  });
-});
 
 document.getElementById('startScraping').addEventListener('click', async () => {
   const maxPages = document.getElementById('maxPages').value;

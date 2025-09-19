@@ -1,5 +1,4 @@
 document.addEventListener('DOMContentLoaded', () => {
-    const selectNextBtn = document.getElementById('selectNextBtn');
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
     const maxPagesInput = document.getElementById('maxPages');
@@ -145,20 +144,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    selectNextBtn.addEventListener('click', async () => {
-        try {
-            const tab = await getMainWindowTab();
-            if (!tab) {
-                alert('Please open a webpage first!');
-                return;
-            }
-            await injectContentScript(tab.id);
-            await chrome.tabs.sendMessage(tab.id, { action: 'selectNextButton' });
-        } catch (error) {
-            console.error('Error:', error);
-            alert('Error: Make sure you have a webpage open in another tab');
-        }
-    });
+    
 
     startBtn.addEventListener('click', async () => {
         try {
