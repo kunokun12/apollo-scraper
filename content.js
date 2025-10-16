@@ -7,6 +7,134 @@ let scrapedDataCache = new Map();
 let scrapeIteration = 1;
 const MAX_ITERATIONS = Infinity; // Allow infinite iterations until stopped
 
+const SOCIAL_DOMAINS = ['facebook.com', 'twitter.com', 'x.com', 'instagram.com', 'youtube.com', 'tiktok.com'];
+const APOLLO_PERSON_REGEX = /^https:\/\/app\.apollo\.io\/#\/people\//i;
+const APOLLO_COMPANY_REGEX = /^https:\/\/app\.apollo\.io\/#\/organizations\//i;
+const LINKEDIN_PROFILE_REGEX = /^https?:\/\/(?:[a-z]+\.)?linkedin\.com\/in\//i;
+const LINKEDIN_COMPANY_REGEX = /^https?:\/\/(?:[a-z]+\.)?linkedin\.com\/(?:company|school|showcase)\//i;
+
+function normalizeUrl(rawUrl) {
+  if (!rawUrl) return '';
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(trimmed);
+    parsed.search = '';
+    let normalized = parsed.href;
+    if (normalized.endsWith('/')) {
+      normalized = normalized.slice(0, -1);
+    }
+    return normalized;
+  } catch (error) {
+    return trimmed;
+  }
+}
+
+function getHostFromUrl(urlString) {
+  try {
+    const hostname = new URL(urlString).hostname.toLowerCase();
+    return hostname.startsWith('www.') ? hostname.slice(4) : hostname;
+  } catch (error) {
+    return '';
+  }
+}
+
+function hostMatchesDomain(host, domain) {
+  return host === domain || host.endsWith(`.${domain}`);
+}
+
+function isSocialHost(host) {
+  if (!host) return false;
+  return SOCIAL_DOMAINS.some(domain => hostMatchesDomain(host, domain));
+}
+
+function collectUrlsFromElement(element) {
+  const urls = [];
+  const anchorTags = element.getElementsByTagName('a');
+  Array.from(anchorTags).forEach(anchor => {
+    if (anchor.href) {
+      urls.push(anchor.href.trim());
+    }
+  });
+
+  const textContent = element.textContent || '';
+  const urlRegex = /(https?:\/\/[^\s,]+)/gi;
+  let match;
+  while ((match = urlRegex.exec(textContent)) !== null) {
+    urls.push(match[0].trim());
+  }
+
+  return urls;
+}
+
+function classifyUrls(urlCandidates) {
+  const classification = {
+    apolloPeople: [],
+    apolloCompany: [],
+    linkedinPeople: [],
+    linkedinCompany: [],
+    social: [],
+    websites: [],
+    uncategorized: []
+  };
+
+  const seen = new Set();
+
+  urlCandidates.forEach(candidate => {
+    const trimmed = candidate ? candidate.trim() : '';
+    if (!trimmed || !/^https?:\/\//i.test(trimmed)) {
+      return;
+    }
+
+    const normalized = normalizeUrl(trimmed);
+    if (!normalized) {
+      return;
+    }
+
+    const normalizedLower = normalized.toLowerCase();
+    if (seen.has(normalizedLower)) {
+      return;
+    }
+    seen.add(normalizedLower);
+
+    const rawLower = trimmed.toLowerCase();
+
+    if (APOLLO_PERSON_REGEX.test(rawLower) || APOLLO_PERSON_REGEX.test(normalizedLower)) {
+      classification.apolloPeople.push(trimmed);
+      return;
+    }
+
+    if (APOLLO_COMPANY_REGEX.test(rawLower) || APOLLO_COMPANY_REGEX.test(normalizedLower)) {
+      classification.apolloCompany.push(trimmed);
+      return;
+    }
+
+    if (LINKEDIN_PROFILE_REGEX.test(rawLower)) {
+      classification.linkedinPeople.push(trimmed);
+      return;
+    }
+
+    if (LINKEDIN_COMPANY_REGEX.test(rawLower)) {
+      classification.linkedinCompany.push(trimmed);
+      return;
+    }
+
+    const host = getHostFromUrl(normalized);
+    if (isSocialHost(host)) {
+      classification.social.push(trimmed);
+      return;
+    }
+
+    if (host) {
+      classification.websites.push(trimmed);
+    } else {
+      classification.uncategorized.push(trimmed);
+    }
+  });
+
+  return classification;
+}
+
 // Detect Apollo "Access Denied" block and show warning
 function getNodeByXPath(xpath) {
   try {
@@ -218,159 +346,56 @@ function getRowBasicData(row) {
       .replace(/\s+/g, ' ')
       .replace(/[\n\r\t]/g, '');
     
-    const links = Array.from(element.getElementsByTagName('a'));
-    
-    if (links.length > 0) {
-      console.log(`[DEBUG] Found ${links.length} links in column ${index + 1}`);
-      
-      // Apollo Link detection works even if column has only one link
-      let apolloLink = basicData['Apollo Link'] || '';
-      let foundApolloLink = false;
-      let linkedInProfileUrl = basicData['LinkedIn URL'] || '';
-      links.forEach(link => {
-        const url = link.href.trim();
-        // Apollo Link
-        if (/^https:\/\/app\.apollo\.io\/#\/people\//.test(url)) {
-          console.log(`[DEBUG] Identified as Apollo Link (single or multi): ${url}`);
-          if (!apolloLink) {
-            basicData['Apollo Link'] = url;
-            foundApolloLink = true;
-          }
-        }
-        // LinkedIn Profile URL
-        if (/^https?:\/\/www\.linkedin\.com\/in\//.test(url)) {
-          console.log(`[DEBUG] Identified as LinkedIn Profile URL (single or multi): ${url}`);
-          if (!linkedInProfileUrl) {
-            basicData['LinkedIn URL'] = url;
-            linkedInProfileUrl = url;
-          }
-        }
-      });
-      if ((foundApolloLink || linkedInProfileUrl) && links.length === 1) {
-        // If we found Apollo Link or LinkedIn Profile URL and there's only one link, skip further processing for this column
-        basicData[`Column_${index + 1}_Text`] = cleanText;
-        return;
+    const urlCandidates = collectUrlsFromElement(element);
+
+    if (urlCandidates.length) {
+      console.log(`[DEBUG] Found ${urlCandidates.length} URL candidates in column ${index + 1}`);
+      const columnClassification = classifyUrls(urlCandidates);
+      console.log('[DEBUG] Column classification:', columnClassification);
+
+      if (!basicData['Apollo Link'] && columnClassification.apolloPeople.length) {
+        basicData['Apollo Link'] = columnClassification.apolloPeople[0];
       }
-      
-      // Process URLs if we find multiple links in a column
-      if (links.length >= 2) {
-        console.log(`[DEBUG] Processing ${links.length} URLs in column ${index + 1}`);
-        // Initialize with existing values or empty arrays/strings
-        const socialUrls = basicData['Social_URLs'] ? basicData['Social_URLs'].split(', ').filter(Boolean) : [];
-        const websiteUrls = basicData['Website'] ? basicData['Website'].split(', ').filter(Boolean) : [];
-        const linkedInUrl = basicData['LinkedIn Company'] || '';
-        const apolloCompanyUrl = basicData['Apollo_Company_URL'] || '';
-        // Apollo Link and LinkedIn URL are already handled above
-        
-        // Get all URLs from the text content first (since they might be in a single string)
-        const textContent = element.textContent.trim();
-        console.log('[DEBUG] Text content:', textContent);
-        
-        let allUrls = [];
-        
-        // First try to get URLs from links
-        allUrls = links.map(link => link.href.trim());
-        console.log(`[DEBUG] Found ${allUrls.length} URLs in <a> tags:`, allUrls);
-        
-        // If no links found in <a> tags, try extracting from text
-        if (allUrls.length === 0) {
-          console.log('[DEBUG] No URLs found in <a> tags, checking text content');
-          const urlRegex = /(https?:\/\/[^\s,]+)/g;
-          let match;
-          while ((match = urlRegex.exec(textContent)) !== null) {
-            const url = match[0].trim();
-            console.log(`[DEBUG] Found URL in text: ${url}`);
-            allUrls.push(url);
-          }
-        }
-        
-        console.log(`[DEBUG] Total URLs to process: ${allUrls.length}`, allUrls);
-        
-        // Process each URL
-        allUrls.forEach((url, i) => {
-          if (!url) {
-            console.log(`[DEBUG] URL at index ${i} is empty, skipping`);
-            return;
-          }
-          
-          console.log(`[DEBUG] Processing URL ${i + 1}/${allUrls.length}: ${url}`);
-          
-          // Convert to lowercase for case-insensitive comparison
-          const lowerUrl = url.toLowerCase();
-          
-          // Apollo Company URL
-          if (/^https:\/\/app\.apollo\.io\/#\/organizations\//.test(url)) {
-            console.log(`[DEBUG] Identified as Apollo Company URL: ${url}`);
-            if (!apolloCompanyUrl) {
-              basicData['Apollo_Company_URL'] = url;
-            }
-          } 
-          // LinkedIn Profile URL
-          else if (/^https?:\/\/www\.linkedin\.com\/in\//.test(url)) {
-            console.log(`[DEBUG] Identified as LinkedIn Profile URL: ${url}`);
-            if (!basicData['LinkedIn URL']) {
-              basicData['LinkedIn URL'] = url;
-            }
-          }
-          // LinkedIn (company/page)
-          else if (lowerUrl.includes('linkedin.com') && !linkedInUrl) {
-            console.log(`[DEBUG] Identified as LinkedIn Company: ${url}`);
-            basicData['LinkedIn Company'] = url;
-          } 
-          // Social Media
-          else if (
-            (lowerUrl.includes('facebook.com') ||
-             lowerUrl.includes('twitter.com') ||
-             lowerUrl.includes('x.com') ||
-             lowerUrl.includes('instagram.com')) &&
-            !socialUrls.includes(url)
-          ) {
-            console.log(`[DEBUG] Identified as social URL: ${url}`);
-            socialUrls.push(url);
-          } 
-          // Website - only add if it's not a social media URL and we haven't found any social media URLs yet
-          else if (url.startsWith('http') && 
-                  !socialUrls.length && 
-                  !lowerUrl.includes('facebook.com') &&
-                  !lowerUrl.includes('twitter.com') &&
-                  !lowerUrl.includes('x.com') &&
-                  !lowerUrl.includes('instagram.com') &&
-                  !websiteUrls.includes(url)) {
-            console.log(`[DEBUG] Identified as website URL: ${url}`);
-            websiteUrls.push(url);
-          } else {
-            console.log(`[DEBUG] URL does not match any category or is a duplicate: ${url}`);
-          }
-        });
-        
-        // Update the arrays in basicData
-        if (socialUrls.length > 0) {
-          basicData['Social_URLs'] = socialUrls.join(', ');
-        } else {
-          basicData['Social_URLs'] = ''; // Explicitly set to empty string if no social URLs found
-        }
-        if (websiteUrls.length > 0) { 
-          basicData['Website'] = websiteUrls.join(', ');
-        } else {
-          basicData['Website'] = ''; // Also ensure Website is an empty string if no website URLs found
-        }
-        
-        console.log('[DEBUG] Final URL Categorization:', {
-          'Apollo_Company_URL': basicData['Apollo_Company_URL'] || '',
-          'Apollo Link': basicData['Apollo Link'] || '',
-          'LinkedIn URL': basicData['LinkedIn URL'] || '',
-          'LinkedIn Company': basicData['LinkedIn Company'] || '',
-          'Social_URLs': basicData['Social_URLs'] || '',
-          'Website': basicData['Website'] || ''
-        });
-        
-      } else if (!(foundApolloLink || linkedInProfileUrl)) {
-        // For columns with a single link, just add it as is if the field doesn't exist
-        const url = links[0].href.trim();
-        console.log(`[DEBUG] Single link found in column ${index + 1}:`, url);
-        if (!basicData[`Column_${index + 1}_URL`]) {
-          basicData[`Column_${index + 1}_URL`] = url;
-        }
+
+      if (!basicData['LinkedIn URL'] && columnClassification.linkedinPeople.length) {
+        basicData['LinkedIn URL'] = columnClassification.linkedinPeople[0];
+      }
+
+      if (!basicData['LinkedIn Company'] && columnClassification.linkedinCompany.length) {
+        basicData['LinkedIn Company'] = columnClassification.linkedinCompany[0];
+      }
+
+      if (!basicData['Apollo_Company_URL'] && columnClassification.apolloCompany.length) {
+        basicData['Apollo_Company_URL'] = columnClassification.apolloCompany[0];
+      }
+
+      if (columnClassification.social.length) {
+        basicData['Social_URLs'] = columnClassification.social.join(', ');
+      } else if (!Object.prototype.hasOwnProperty.call(basicData, 'Social_URLs')) {
+        basicData['Social_URLs'] = '';
+      }
+
+      if (columnClassification.websites.length) {
+        basicData['Website'] = columnClassification.websites.join(', ');
+      } else if (!Object.prototype.hasOwnProperty.call(basicData, 'Website')) {
+        basicData['Website'] = '';
+      }
+
+      const fallbackCandidates = [
+        columnClassification.apolloPeople[0],
+        columnClassification.linkedinPeople[0],
+        columnClassification.linkedinCompany[0],
+        columnClassification.apolloCompany[0],
+        columnClassification.websites[0],
+        columnClassification.social[0],
+        columnClassification.uncategorized[0]
+      ];
+      const fallbackUrl = fallbackCandidates.find(Boolean);
+
+      if (fallbackUrl && !basicData[`Column_${index + 1}_URL`]) {
+        basicData[`Column_${index + 1}_URL`] = fallbackUrl;
+      } else if (!basicData[`Column_${index + 1}_URL`]) {
+        basicData[`Column_${index + 1}_URL`] = '';
       }
     } else {
       console.log(`[DEBUG] No links found in column ${index + 1}`);
