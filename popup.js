@@ -21,6 +21,9 @@ document.getElementById('stopScraping').addEventListener('click', () => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'scrapedData') {
     updateTable(message.data);
+  } else if (message.type === 'scrapedDataBatch') {
+    const batch = Array.isArray(message.data) ? message.data : [];
+    batch.forEach(item => updateTable(item));
   }
 });
 

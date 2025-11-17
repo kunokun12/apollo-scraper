@@ -13,11 +13,15 @@ chrome.action.onClicked.addListener((tab) => {
 let storedData = [];
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'scrapedData') {
-    // Store the data
-    storedData.push(message.data);
-    
-    // Try to forward to popup if it's open
+  if (message.type === 'scrapedData' || message.type === 'scrapedDataBatch') {
+    const batch = message.type === 'scrapedDataBatch'
+      ? (Array.isArray(message.data) ? message.data : [])
+      : [message.data];
+
+    if (batch.length) {
+      storedData.push(...batch);
+    }
+
     try {
       chrome.runtime.sendMessage(message);
     } catch (error) {

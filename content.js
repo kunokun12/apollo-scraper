@@ -5,7 +5,41 @@ let maxPages = 1;
 let lastHoveredElement = null;
 let scrapedDataCache = new Map();
 let scrapeIteration = 1;
+const REALTIME_SERVER_ROOT = 'http://127.0.0.1:5055';
+let scrapeMode = 'realtime';
+let currentCid = '';
+let realtimeErrorNotified = false;
 const MAX_ITERATIONS = Infinity; // Allow infinite iterations until stopped
+// const MAX_ROWS_LIMIT = 2000; // Maximum number of rows to scrape before stopping - REMOVED
+let totalRowsScraped = 0; // Track total rows scraped across all iterations
+const REALTIME_REQUEST_TIMEOUT_MS = 6000;
+const REALTIME_RETRY_DELAY_MS = 4000;
+const REALTIME_MAX_BATCH_SIZE = 250;
+const realtimeQueue = [];
+let realtimeFlushInFlight = false;
+let realtimeRetryHandle = null;
+let columnNameOverrides = {};
+let securityChallengeObserver = null;
+let securityChallengeNotified = false;
+
+// Persist user column overrides so realtime payload matches popup display
+chrome.storage?.local?.get(['columnNames'], result => {
+  if (result && result.columnNames && typeof result.columnNames === 'object') {
+    columnNameOverrides = result.columnNames;
+  }
+});
+
+chrome.storage?.onChanged?.addListener((changes, areaName) => {
+  if (areaName !== 'local' || !changes?.columnNames) {
+    return;
+  }
+  const overrides = changes.columnNames.newValue;
+  if (overrides && typeof overrides === 'object') {
+    columnNameOverrides = overrides;
+  } else {
+    columnNameOverrides = {};
+  }
+});
 
 const SOCIAL_DOMAINS = ['facebook.com', 'twitter.com', 'x.com', 'instagram.com', 'youtube.com', 'tiktok.com'];
 const APOLLO_PERSON_REGEX = /^https:\/\/app\.apollo\.io\/#\/people\//i;
@@ -68,10 +102,10 @@ function collectUrlsFromElement(element) {
 }
 
 function classifyUrls(urlCandidates) {
-  const classification = {
-    apolloPeople: [],
-    apolloCompany: [],
-    linkedinPeople: [],
+    const classification = {
+        apolloPeople: [],
+        apolloCompany: [],
+        linkedinPeople: [],
     linkedinCompany: [],
     social: [],
     websites: [],
@@ -132,7 +166,129 @@ function classifyUrls(urlCandidates) {
     }
   });
 
-  return classification;
+    return classification;
+}
+
+function getRealtimeColumnName(sourceKey) {
+  if (!sourceKey) {
+    return sourceKey;
+  }
+  const override = columnNameOverrides?.[sourceKey];
+  if (typeof override === 'string') {
+    const trimmed = override.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return sourceKey;
+}
+
+function mapRowKeysForRealtime(row) {
+  const mapped = {};
+  const usedKeys = new Set();
+  if (!row || typeof row !== 'object') {
+    return mapped;
+  }
+
+  Object.entries(row).forEach(([key, value]) => {
+    let targetKey = getRealtimeColumnName(key);
+    if (usedKeys.has(targetKey)) {
+      let suffix = 2;
+      let candidate = `${targetKey} (${suffix})`;
+      while (usedKeys.has(candidate)) {
+        suffix += 1;
+        candidate = `${targetKey} (${suffix})`;
+      }
+      console.warn(`Duplicate realtime column name detected for '${targetKey}'. Renaming to '${candidate}'.`);
+      targetKey = candidate;
+    }
+    usedKeys.add(targetKey);
+    mapped[targetKey] = value;
+  });
+
+  return mapped;
+}
+
+function dispatchRealtimeBatch(cid, rows) {
+    if (!cid || !rows || !rows.length) {
+        return;
+    }
+    realtimeQueue.push({ cid, rows });
+    if (!realtimeFlushInFlight) {
+        queueMicrotask(flushRealtimeQueue);
+    }
+}
+
+async function flushRealtimeQueue() {
+    if (realtimeFlushInFlight || realtimeQueue.length === 0) {
+        return;
+    }
+
+    const { cid } = realtimeQueue[0];
+    const batch = [];
+    while (realtimeQueue.length && realtimeQueue[0].cid === cid && batch.length < REALTIME_MAX_BATCH_SIZE) {
+        const entry = realtimeQueue.shift();
+        batch.push(...entry.rows);
+    }
+
+    realtimeFlushInFlight = true;
+    try {
+        await sendRealtimePayload(cid, batch);
+        realtimeErrorNotified = false;
+        if (realtimeRetryHandle) {
+            clearTimeout(realtimeRetryHandle);
+            realtimeRetryHandle = null;
+        }
+        realtimeFlushInFlight = false;
+        if (realtimeQueue.length) {
+            queueMicrotask(flushRealtimeQueue);
+        }
+    } catch (error) {
+        realtimeQueue.unshift({ cid, rows: batch });
+        realtimeFlushInFlight = false;
+        reportRealtimeError(error);
+        if (!realtimeRetryHandle) {
+            realtimeRetryHandle = setTimeout(() => {
+                realtimeRetryHandle = null;
+                flushRealtimeQueue();
+            }, REALTIME_RETRY_DELAY_MS);
+        }
+    }
+}
+
+async function sendRealtimePayload(cid, rows) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REALTIME_REQUEST_TIMEOUT_MS);
+    try {
+        const response = await fetch(`${REALTIME_SERVER_ROOT}/rows`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cid, rows }),
+            cache: 'no-store',
+            signal: controller.signal,
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+function reportRealtimeError(error) {
+    console.error('Failed to stream realtime rows:', error);
+    if (realtimeErrorNotified) {
+        return;
+    }
+    try {
+        chrome.runtime.sendMessage({
+            type: 'error',
+            message: `Realtime server error: ${error?.message || error}`,
+        });
+    } catch (messagingError) {
+        console.warn('Unable to notify popup about realtime error:', messagingError);
+    }
+    realtimeErrorNotified = true;
 }
 
 // Detect Apollo "Access Denied" block and show warning
@@ -152,6 +308,122 @@ function isAccessDeniedPresent() {
   if (!node) return false;
   const text = (node.textContent || '').toLowerCase();
   return text.includes('access denied');
+}
+
+function isElementVisible(element) {
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+  const style = window.getComputedStyle(element);
+  if (!style) {
+    return false;
+  }
+  if (style.display === 'none' || style.visibility === 'hidden') {
+    return false;
+  }
+  const opacity = parseFloat(style.opacity || '1');
+  if (!Number.isNaN(opacity) && opacity <= 0) {
+    return false;
+  }
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+function isSecurityChallengeActive() {
+  // Cloudflare security challenges render elements whose ids begin with "securityChallenge".
+  const candidates = Array.from(document.querySelectorAll('[id]')).filter(el => {
+    const id = typeof el.id === 'string' ? el.id.trim() : '';
+    if (!id) {
+      return false;
+    }
+    return /^securitychallenge(?:[_-]|$)/i.test(id);
+  });
+  if (!candidates.length) {
+    return false;
+  }
+  return candidates.some(isElementVisible);
+}
+
+function stopSecurityChallengeObserver() {
+  if (securityChallengeObserver) {
+    securityChallengeObserver.disconnect();
+    securityChallengeObserver = null;
+  }
+}
+
+function startSecurityChallengeObserver() {
+  // Monitor DOM mutations so we can stop scraping as soon as a challenge appears mid-run.
+  if (securityChallengeObserver) {
+    if (isSecurityChallengeActive()) {
+      handleSecurityChallengeDetected();
+    }
+    return;
+  }
+
+  if (typeof MutationObserver !== 'function') {
+    if (isSecurityChallengeActive()) {
+      handleSecurityChallengeDetected();
+    }
+    return;
+  }
+
+  const target = document.body || document.documentElement;
+  if (!target) {
+    return;
+  }
+
+  securityChallengeObserver = new MutationObserver(() => {
+    if (!isScrapingActive) {
+      return;
+    }
+    if (isSecurityChallengeActive()) {
+      handleSecurityChallengeDetected();
+    }
+  });
+
+  securityChallengeObserver.observe(target, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['id', 'class', 'style', 'hidden']
+  });
+
+  if (isSecurityChallengeActive()) {
+    handleSecurityChallengeDetected();
+  }
+}
+
+function handleSecurityChallengeDetected() {
+  // Centralized exit path when Apollo shows a security challenge.
+  if (securityChallengeNotified) {
+    if (isScrapingActive) {
+      isScrapingActive = false;
+      cleanupMemory({ resetSecurityChallengeState: false });
+    }
+    return;
+  }
+
+  const msg = 'Security challenge detected on page. Scraping has been stopped until you resolve it manually.';
+  console.warn(msg);
+
+  securityChallengeNotified = true;
+  showScrapingStoppedWarning(msg);
+  try {
+    const result = chrome.runtime.sendMessage({ type: 'error', message: msg });
+    if (result && typeof result.catch === 'function') {
+      result.catch(error => {
+        console.warn('Unable to notify popup about security challenge:', error);
+      });
+    }
+  } catch (error) {
+    console.warn('Unable to notify popup about security challenge:', error);
+  }
+
+  if (isScrapingActive) {
+    isScrapingActive = false;
+  }
+
+  cleanupMemory({ resetSecurityChallengeState: false });
 }
 
 function showScrapingStoppedWarning(message) {
@@ -228,6 +500,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
+      securityChallengeNotified = false;
+      stopSecurityChallengeObserver();
+
+      if (isSecurityChallengeActive()) {
+        handleSecurityChallengeDetected();
+        return;
+      }
+
       // Stop immediately if Apollo Access Denied block is present
       if (isAccessDeniedPresent()) {
         const msg = 'Access Denied detected on page. Scraping has been stopped to prevent further actions. Please resolve the block before retrying.';
@@ -243,9 +523,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       scrapeIteration = 1;
       isScrapingActive = true;
       maxPages = parseInt(message.maxPages);
+      scrapeMode = message.mode === 'realtime' ? 'realtime' : 'save';
+      currentCid = typeof message.cid === 'string' ? message.cid.trim() : '';
       scrapedDataCache.clear();
-      
-      console.log('Starting new scraping session...');
+      realtimeErrorNotified = false;
+      totalRowsScraped = 0; // Reset total row count for new session
+
+      if (scrapeMode === 'realtime' && !currentCid) {
+        const warning = 'Realtime mode requires a CID before scraping can begin.';
+        console.warn(warning);
+        chrome.runtime.sendMessage({ type: 'error', message: warning }).catch(() => {});
+        isScrapingActive = false;
+        cleanupMemory();
+        return true;
+      }
+
+      console.log(`Starting new scraping session (mode=${scrapeMode}, cid=${currentCid || 'n/a'})...`);
       startScraping();
       break;
     case 'stopScraping':
@@ -480,6 +773,7 @@ async function waitForRowReady(row, maxWaitMs = 5000) {
 
 async function startScraping() {
   console.log(`Starting scraping iteration ${scrapeIteration}...`);
+  startSecurityChallengeObserver();
   
   try {
     while (isScrapingActive && currentPage <= maxPages) {
@@ -490,6 +784,11 @@ async function startScraping() {
         isScrapingActive = false;
         showScrapingStoppedWarning(msg);
         try { await chrome.runtime.sendMessage({ type: 'error', message: msg }); } catch (e) {}
+        return;
+      }
+
+      if (isSecurityChallengeActive()) {
+        handleSecurityChallengeDetected();
         return;
       }
       // Read current page from DOM using provided XPath and log it
@@ -509,17 +808,36 @@ async function startScraping() {
       }
 
       const rows = document.getElementsByClassName('zp_Uiy0R');
-      console.log(`Processing page ${currentPage}, found ${rows.length} rows`);
+      console.log(`Processing page ${curjrentPage}, found ${rows.length} rows. Total scraped so far: ${totalRowsScraped}`);
       // Wait for rows to finish rendering to avoid empty columns (lighter, faster)
       const pageStable = await waitForRowsToStabilize(6000, 2, 150);
       
       // Process all rows in current page immediately
       const pageBatch = [];
+      const realtimeBatch = [];
       for (const row of rows) {
         if (!isScrapingActive) {
           console.log('Scraping stopped by user');
           return;
         }
+
+        // Row limit check removed - scraping will continue without limit
+        /* 
+        // Check if we've reached the maximum row limit
+        if (totalRowsScraped >= MAX_ROWS_LIMIT) {
+          console.log(`Reached maximum row limit of ${MAX_ROWS_LIMIT}. Stopping scraping.`);
+          const warningMsg = `Scraping has been stopped after reaching the maximum limit of ${MAX_ROWS_LIMIT} rows. This helps prevent excessive data collection and potential rate limiting.`;
+          showScrapingStoppedWarning(warningMsg);
+          try {
+            chrome.runtime.sendMessage({ type: 'error', message: warningMsg });
+          } catch (e) {
+            console.log('Failed to notify popup about row limit:', e);
+          }
+          isScrapingActive = false;
+          return;
+        }
+        */
+
         // Ensure row content is ready only if page was not fully stable
         if (!pageStable) {
           await waitForRowReady(row, 1200);
@@ -532,6 +850,14 @@ async function startScraping() {
         if (!scrapedDataCache.has(rowId)) {
           scrapedDataCache.set(rowId, basicData);
           pageBatch.push(basicData);
+          totalRowsScraped++; // Increment total row counter
+          const realtimeRow = {
+            __row_id: rowId,
+            __cid: currentCid,
+            ...mapRowKeysForRealtime(basicData)
+          };
+          realtimeBatch.push(realtimeRow);
+          console.log(`Total rows scraped: ${totalRowsScraped}`);
         } else {
           console.log('Skipping duplicate row with ID:', rowId);
         }
@@ -547,6 +873,10 @@ async function startScraping() {
         } catch (error) {
           console.log('Error sending batch data:', error);
         }
+      }
+      
+      if (scrapeMode === 'realtime' && realtimeBatch.length) {
+        dispatchRealtimeBatch(currentCid, realtimeBatch);
       }
       
       // Check if we've reached the last page (based on DOM page monitoring)
@@ -694,7 +1024,7 @@ async function processExcludes() {
         await new Promise(resolve => setTimeout(resolve, 10000)); // Increased from 5000 to 10000
         
         // Clean up memory after save
-        cleanupMemory();
+        cleanupMemory({ preserveSessionState: true });
         
         console.log('Save completed and memory cleaned, proceeding to next iteration');
         return true;
@@ -713,11 +1043,21 @@ async function processExcludes() {
 }
 
 // Add cleanup function
-function cleanupMemory() {
+function cleanupMemory(options = {}) {
+  const {
+    preserveSessionState = false,
+    resetSecurityChallengeState = true
+  } = options;
   console.log('Starting memory cleanup...');
   
   // Clear the data cache
   scrapedDataCache.clear();
+  realtimeQueue.length = 0;
+  realtimeFlushInFlight = false;
+  if (realtimeRetryHandle) {
+    clearTimeout(realtimeRetryHandle);
+    realtimeRetryHandle = null;
+  }
   
   // Remove from localStorage
   try {
@@ -728,6 +1068,16 @@ function cleanupMemory() {
   
   // Clear any global references
   lastHoveredElement = null;
+  if (!preserveSessionState) {
+    scrapeMode = 'realtime';
+    currentCid = '';
+    totalRowsScraped = 0; // Reset row count when not preserving session state
+  }
+  realtimeErrorNotified = false;
+  stopSecurityChallengeObserver();
+  if (resetSecurityChallengeState) {
+    securityChallengeNotified = false;
+  }
   
   // Force garbage collection if possible
   if (window.gc) {
@@ -746,6 +1096,14 @@ function cleanupMemory() {
   }
   
   console.log('Memory cleanup completed');
+
+  if (!isScrapingActive) {
+    try {
+      chrome.runtime.sendMessage({ type: 'scrapeStopped' });
+    } catch (error) {
+      console.log('Failed to notify popup about scrape stop:', error);
+    }
+  }
 }
 
 // Add cleanup on extension unload
