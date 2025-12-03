@@ -984,7 +984,7 @@ async function processExcludes() {
     console.log(`Processing ${uniqueWebsites.length} unique websites for exclusion`);
     
     // Find exclude text area using class name
-    const excludeTextAreas = document.getElementsByClassName('zp-text-area zp_HnzhA zp_MLOFa zp_CALvp');
+    const excludeTextAreas = document.getElementsByClassName('zp-text-area zp_ABCL_ zp_Hdkch');
     const excludeTextArea = excludeTextAreas[1]; // Get the second instance
     
     if (excludeTextArea) {
