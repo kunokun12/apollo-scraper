@@ -489,7 +489,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
     case 'startScraping':
       // Check for exclude text area using class name
-      const excludeTextAreas = document.getElementsByClassName('zp-text-area zp_HnzhA zp_MLOFa zp_CALvp');
+      const excludeTextAreas = document.getElementsByClassName('zp-text-area zp_ABCL_ zp_Hdkch');
       const excludeTextArea = excludeTextAreas[1]; // Get the second instance
       
       if (!excludeTextArea) {
@@ -808,7 +808,7 @@ async function startScraping() {
       }
 
       const rows = document.getElementsByClassName('zp_Uiy0R');
-      console.log(`Processing page ${curjrentPage}, found ${rows.length} rows. Total scraped so far: ${totalRowsScraped}`);
+    console.log(`Processing page ${currentPage}, found ${rows.length} rows. Total scraped so far: ${totalRowsScraped}`);
       // Wait for rows to finish rendering to avoid empty columns (lighter, faster)
       const pageStable = await waitForRowsToStabilize(6000, 2, 150);
       
